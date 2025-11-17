@@ -16,16 +16,30 @@ exactly where they left off - all without extra servers to manage.
 Prerequisites:
 
 - Node.js
-- PostgreSQL (support for additional backends like Redis and SQLite coming soon.
-  See [Roadmap](#roadmap) for details.)
+- A backend storage provider:
+  - PostgreSQL (recommended for production)
+  - In-memory backend (for development/testing)
+
+Support for additional backends like Redis and SQLite coming soon. See
+[Roadmap](#roadmap) for details.
 
 ### 1. Install
+
+**With PostgreSQL (recommended for production):**
 
 ```bash
 npm install openworkflow @openworkflow/backend-postgres
 ```
 
+**With in-memory backend (for development/testing):**
+
+```bash
+npm install openworkflow @openworkflow/backend-memory
+```
+
 ### 2. Define a workflow
+
+**With PostgreSQL:**
 
 ```ts
 import { BackendPostgres } from "@openworkflow/backend-postgres";
@@ -60,6 +74,29 @@ const sendWelcomeEmail = ow.defineWorkflow(
   },
 );
 ```
+
+**With in-memory backend:**
+
+```ts
+import { BackendMemory } from "@openworkflow/backend-memory";
+import { OpenWorkflow } from "openworkflow";
+
+const backend = BackendMemory.create();
+const ow = new OpenWorkflow({ backend });
+
+// Define workflows the same way...
+const sendWelcomeEmail = ow.defineWorkflow(
+  { name: "send-welcome-email" },
+  async ({ input, step }) => {
+    // ... workflow logic
+  },
+);
+```
+
+> **Note:** The in-memory backend is ideal for development, testing, and
+> scenarios where clients maintain state (e.g., via HTTP SSE with JSON patches).
+> All data is lost when the process exits. Use PostgreSQL for production
+> workloads requiring durability.
 
 ### 3. Start a worker
 
@@ -332,6 +369,7 @@ const workflow = ow.defineWorkflow(
 **Live in current `npm` release:**
 
 - ✅ PostgreSQL backend
+- ✅ In-memory backend
 - ✅ Worker with concurrency control
 - ✅ Step memoization & retries
 - ✅ Graceful shutdown
