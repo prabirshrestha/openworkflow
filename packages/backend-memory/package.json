@@ -1,0 +1,43 @@
+{
+  "name": "@openworkflow/backend-memory",
+  "version": "0.3.0",
+  "description": "In-memory backend for OpenWorkflow",
+  "keywords": [
+    "openworkflow",
+    "backend",
+    "in-memory"
+  ],
+  "homepage": "https://openworkflow.dev",
+  "bugs": "https://github.com/openworkflowdev/openworkflow/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openworkflowdev/openworkflow.git",
+    "directory": "packages/backend-memory"
+  },
+  "license": "Apache-2.0",
+  "author": "OpenWorkflow",
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "openworkflow": "file:../openworkflow"
+  },
+  "peerDependencies": {
+    "openworkflow": "^0.3.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
