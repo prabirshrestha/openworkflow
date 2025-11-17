@@ -51,7 +51,7 @@ describe("BackendMemory", () => {
     });
 
     test("uses provided availableAt", async () => {
-      const futureDate = new Date(Date.now() + 10000);
+      const futureDate = new Date(Date.now() + 10_000);
       const run = await backend.createWorkflowRun({
         workflowName: "test-workflow",
         version: null,
@@ -113,7 +113,7 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       expect(claimed).toBeDefined();
@@ -127,14 +127,14 @@ describe("BackendMemory", () => {
     test("returns null when no workflow runs are available", async () => {
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       expect(claimed).toBeNull();
     });
 
     test("does not claim future workflow runs", async () => {
-      const futureDate = new Date(Date.now() + 10000);
+      const futureDate = new Date(Date.now() + 10_000);
       await backend.createWorkflowRun({
         workflowName: "test-workflow",
         version: null,
@@ -148,7 +148,7 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       expect(claimed).toBeNull();
@@ -188,7 +188,7 @@ describe("BackendMemory", () => {
       // Now claim again - should get the pending run
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       expect(claimed).toBeDefined();
@@ -211,7 +211,7 @@ describe("BackendMemory", () => {
       // Try to claim - should mark as failed and not return it
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       expect(claimed).toBeNull();
@@ -240,14 +240,14 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       const before = new Date();
       const heartbeat = await backend.heartbeatWorkflowRun({
         workflowRunId: claimed!.id,
         workerId: "worker-1",
-        leaseDurationMs: 60000,
+        leaseDurationMs: 60_000,
       });
 
       expect(heartbeat.availableAt).toBeDefined();
@@ -270,7 +270,7 @@ describe("BackendMemory", () => {
         backend.heartbeatWorkflowRun({
           workflowRunId: created.id,
           workerId: "worker-1",
-          leaseDurationMs: 30000,
+          leaseDurationMs: 30_000,
         }),
       ).rejects.toThrow("Failed to heartbeat workflow run");
     });
@@ -289,14 +289,14 @@ describe("BackendMemory", () => {
 
       await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       await expect(
         backend.heartbeatWorkflowRun({
           workflowRunId: created.id,
           workerId: "worker-2",
-          leaseDurationMs: 30000,
+          leaseDurationMs: 30_000,
         }),
       ).rejects.toThrow("Failed to heartbeat workflow run");
     });
@@ -317,10 +317,10 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
-      const resumeAt = new Date(Date.now() + 60000);
+      const resumeAt = new Date(Date.now() + 60_000);
       const sleeping = await backend.sleepWorkflowRun({
         workflowRunId: claimed!.id,
         workerId: "worker-1",
@@ -346,7 +346,7 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       // Mark as succeeded
@@ -382,7 +382,7 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       const succeeded = await backend.markWorkflowRunSucceeded({
@@ -413,7 +413,7 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       const failed = await backend.markWorkflowRunFailed({
@@ -444,7 +444,7 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       // Wait a bit to ensure deadline is exceeded
@@ -522,7 +522,7 @@ describe("BackendMemory", () => {
 
       const claimed = await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
 
       await backend.markWorkflowRunSucceeded({
@@ -556,7 +556,7 @@ describe("BackendMemory", () => {
 
       await backend.claimWorkflowRun({
         workerId: "worker-1",
-        leaseDurationMs: 30000,
+        leaseDurationMs: 30_000,
       });
     });
 
@@ -671,6 +671,195 @@ describe("BackendMemory", () => {
       });
 
       expect(retrieved).toBeNull();
+    });
+  });
+
+  describe("State export and import", () => {
+    test("exports and imports workflow runs", async () => {
+      const backend1 = BackendMemory.create();
+
+      // Create some workflow runs
+      const run1 = await backend1.createWorkflowRun({
+        workflowName: "workflow-1",
+        version: null,
+        idempotencyKey: null,
+        config: {},
+        context: null,
+        input: { data: "test1" },
+        availableAt: null,
+        deadlineAt: null,
+      });
+
+      const run2 = await backend1.createWorkflowRun({
+        workflowName: "workflow-2",
+        version: null,
+        idempotencyKey: null,
+        config: {},
+        context: null,
+        input: { data: "test2" },
+        availableAt: null,
+        deadlineAt: null,
+      });
+
+      // Export state
+      const state = backend1.exportState();
+
+      expect(state.workflowRuns).toHaveLength(2);
+      expect(state.stepAttempts).toHaveLength(0);
+
+      // Create new backend and import state
+      const backend2 = BackendMemory.create({ initialState: state });
+
+      // Verify runs were imported
+      const retrievedRun1 = await backend2.getWorkflowRun({
+        workflowRunId: run1.id,
+      });
+      const retrievedRun2 = await backend2.getWorkflowRun({
+        workflowRunId: run2.id,
+      });
+
+      expect(retrievedRun1).not.toBeNull();
+      expect(retrievedRun1!.input).toEqual({ data: "test1" });
+      expect(retrievedRun2).not.toBeNull();
+      expect(retrievedRun2!.input).toEqual({ data: "test2" });
+    });
+
+    test("exports and imports step attempts", async () => {
+      const backend1 = BackendMemory.create();
+
+      const run = await backend1.createWorkflowRun({
+        workflowName: "test-workflow",
+        version: null,
+        idempotencyKey: null,
+        config: {},
+        context: null,
+        input: null,
+        availableAt: null,
+        deadlineAt: null,
+      });
+
+      await backend1.claimWorkflowRun({
+        workerId: "worker-1",
+        leaseDurationMs: 30_000,
+      });
+
+      // Create step attempts
+      const step1 = await backend1.createStepAttempt({
+        workflowRunId: run.id,
+        workerId: "worker-1",
+        stepName: "step-1",
+        kind: "function",
+        config: {},
+        context: null,
+      });
+
+      await backend1.markStepAttemptSucceeded({
+        workflowRunId: run.id,
+        stepAttemptId: step1.id,
+        workerId: "worker-1",
+        output: { value: 42 },
+      });
+
+      // Export state
+      const state = backend1.exportState();
+
+      expect(state.workflowRuns).toHaveLength(1);
+      expect(state.stepAttempts).toHaveLength(1);
+
+      // Create new backend and import state
+      const backend2 = BackendMemory.create({ initialState: state });
+
+      // Verify steps were imported
+      const steps = await backend2.listStepAttempts({
+        workflowRunId: run.id,
+      });
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0].stepName).toBe("step-1");
+      expect(steps[0].output).toEqual({ value: 42 });
+    });
+
+    test("importState replaces existing data", async () => {
+      const backend = BackendMemory.create();
+
+      // Create initial data
+      const run1 = await backend.createWorkflowRun({
+        workflowName: "old-workflow",
+        version: null,
+        idempotencyKey: null,
+        config: {},
+        context: null,
+        input: { data: "old" },
+        availableAt: null,
+        deadlineAt: null,
+      });
+
+      // Export state with different data
+      const backend2 = BackendMemory.create();
+      const run2 = await backend2.createWorkflowRun({
+        workflowName: "new-workflow",
+        version: null,
+        idempotencyKey: null,
+        config: {},
+        context: null,
+        input: { data: "new" },
+        availableAt: null,
+        deadlineAt: null,
+      });
+      const newState = backend2.exportState();
+
+      // Import new state into first backend
+      backend.importState(newState);
+
+      // Old run should be gone
+      const oldRun = await backend.getWorkflowRun({
+        workflowRunId: run1.id,
+      });
+      expect(oldRun).toBeNull();
+
+      // New run should exist
+      const retrievedRun = await backend.getWorkflowRun({
+        workflowRunId: run2.id,
+      });
+      expect(retrievedRun).not.toBeNull();
+      expect(retrievedRun!.input).toEqual({ data: "new" });
+    });
+
+    test("exported state can be serialized to JSON", async () => {
+      const backend = BackendMemory.create();
+
+      const run = await backend.createWorkflowRun({
+        workflowName: "test-workflow",
+        version: "v1",
+        idempotencyKey: "key-123",
+        config: { timeout: 5000 },
+        context: { requestId: "req-456" },
+        input: { userId: 123 },
+        availableAt: new Date("2025-01-01T00:00:00Z"),
+        deadlineAt: new Date("2025-01-01T01:00:00Z"),
+      });
+
+      const state = backend.exportState();
+
+      // Serialize to JSON
+      const json = JSON.stringify(state);
+      expect(json).toBeDefined();
+
+      // Deserialize from JSON
+      const parsedState = JSON.parse(json);
+
+      // Create new backend with deserialized state
+      const backend2 = BackendMemory.create({ initialState: parsedState });
+
+      const retrievedRun = await backend2.getWorkflowRun({
+        workflowRunId: run.id,
+      });
+
+      expect(retrievedRun).not.toBeNull();
+      expect(retrievedRun!.workflowName).toBe("test-workflow");
+      expect(retrievedRun!.version).toBe("v1");
+      expect(retrievedRun!.idempotencyKey).toBe("key-123");
+      expect(retrievedRun!.input).toEqual({ userId: 123 });
     });
   });
 });

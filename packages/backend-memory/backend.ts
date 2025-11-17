@@ -9,7 +9,6 @@ import {
   GetStepAttemptParams,
   GetWorkflowRunParams,
   HeartbeatWorkflowRunParams,
-  JsonValue,
   ListStepAttemptsParams,
   MarkStepAttemptFailedParams,
   MarkStepAttemptSucceededParams,
@@ -23,6 +22,16 @@ import { randomUUID } from "node:crypto";
 
 interface BackendMemoryOptions {
   namespaceId?: string;
+  initialState?: BackendMemoryState;
+}
+
+/**
+ * Serializable state of the in-memory backend.
+ * Can be exported and imported to restore the backend state.
+ */
+export interface BackendMemoryState {
+  workflowRuns: WorkflowRun[];
+  stepAttempts: StepAttempt[];
 }
 
 /**
@@ -32,7 +41,10 @@ interface BackendMemoryOptions {
  * This backend is suitable for development, testing, and scenarios where
  * clients maintain workflow state (e.g., sending JSON patches via HTTP SSE).
  *
- * Note: All data is lost when the process exits.
+ * State can be exported and imported using `exportState()` and the
+ * `initialState` option, enabling workflow state to be sent to/from clients.
+ *
+ * Note: All data is lost when the process exits unless explicitly exported.
  */
 export class BackendMemory implements Backend {
   private namespaceId: string;
@@ -45,6 +57,11 @@ export class BackendMemory implements Backend {
 
   constructor(options?: BackendMemoryOptions) {
     this.namespaceId = options?.namespaceId ?? DEFAULT_NAMESPACE_ID;
+
+    // Import initial state if provided
+    if (options?.initialState) {
+      this.importState(options.initialState);
+    }
   }
 
   /**
@@ -54,9 +71,45 @@ export class BackendMemory implements Backend {
     return new BackendMemory(options);
   }
 
-  async createWorkflowRun(
-    params: CreateWorkflowRunParams,
-  ): Promise<WorkflowRun> {
+  /**
+   * Export the current state of the backend as a serializable object.
+   * This can be sent to clients or stored for later restoration.
+   */
+  exportState(): BackendMemoryState {
+    return {
+      workflowRuns: [...this.workflowRuns.values()],
+      stepAttempts: [...this.stepAttempts.values()],
+    };
+  }
+
+  /**
+   * Import state into the backend, replacing all existing data.
+   * This allows restoring state received from clients or other sources.
+   */
+  importState(state: BackendMemoryState): void {
+    // Clear existing state
+    this.workflowRuns.clear();
+    this.stepAttempts.clear();
+    this.workflowRunSteps.clear();
+
+    // Import workflow runs
+    for (const run of state.workflowRuns) {
+      this.workflowRuns.set(run.id, run);
+      this.workflowRunSteps.set(run.id, new Set());
+    }
+
+    // Import step attempts and build the index
+    for (const step of state.stepAttempts) {
+      this.stepAttempts.set(step.id, step);
+
+      const stepSet = this.workflowRunSteps.get(step.workflowRunId);
+      if (stepSet) {
+        stepSet.add(step.id);
+      }
+    }
+  }
+
+  createWorkflowRun(params: CreateWorkflowRunParams): Promise<WorkflowRun> {
     const id = randomUUID();
     const now = new Date();
 
@@ -87,26 +140,26 @@ export class BackendMemory implements Backend {
     this.workflowRuns.set(id, workflowRun);
     this.workflowRunSteps.set(id, new Set());
 
-    return structuredClone(workflowRun);
+    return Promise.resolve(structuredClone(workflowRun));
   }
 
-  async getWorkflowRun(
+  getWorkflowRun(
     params: GetWorkflowRunParams,
   ): Promise<WorkflowRun | null> {
     const workflowRun = this.workflowRuns.get(params.workflowRunId);
 
     if (!workflowRun || workflowRun.namespaceId !== this.namespaceId) {
-      return null;
+      return Promise.resolve(null);
     }
 
-    return structuredClone(workflowRun);
+    return Promise.resolve(structuredClone(workflowRun));
   }
 
   async claimWorkflowRun(
     params: ClaimWorkflowRunParams,
   ): Promise<WorkflowRun | null> {
     // Use a lock to ensure atomic claim operation
-    const result = await (this.claimLock = this.claimLock.then(async () => {
+    const claimOperation = this.claimLock.then(() => {
       const now = new Date();
 
       // First, mark any deadline-expired workflow runs as failed
@@ -131,7 +184,7 @@ export class BackendMemory implements Backend {
 
       // Find an available workflow run to claim
       // Sort by: pending first, then by availableAt, then by createdAt
-      const candidates = Array.from(this.workflowRuns.values())
+      const candidates = [...this.workflowRuns.values()]
         .filter(
           (run) =>
             run.namespaceId === this.namespaceId &&
@@ -140,7 +193,7 @@ export class BackendMemory implements Backend {
             run.availableAt <= now &&
             (!run.deadlineAt || run.deadlineAt > now),
         )
-        .sort((a, b) => {
+        .toSorted((a, b) => {
           // Pending runs first
           if (a.status === "pending" && b.status !== "pending") return -1;
           if (a.status !== "pending" && b.status === "pending") return 1;
@@ -174,67 +227,78 @@ export class BackendMemory implements Backend {
       this.workflowRuns.set(candidate.id, claimed);
 
       return structuredClone(claimed);
-    }) as Promise<WorkflowRun | null>);
+    });
+
+    this.claimLock = claimOperation;
+    const result = await claimOperation;
 
     return result;
   }
 
-  async heartbeatWorkflowRun(
+  heartbeatWorkflowRun(
     params: HeartbeatWorkflowRunParams,
   ): Promise<WorkflowRun> {
-    const workflowRun = this.workflowRuns.get(params.workflowRunId);
+    try {
+      const workflowRun = this.workflowRuns.get(params.workflowRunId);
 
-    if (
-      !workflowRun ||
-      workflowRun.namespaceId !== this.namespaceId ||
-      workflowRun.status !== "running" ||
-      workflowRun.workerId !== params.workerId
-    ) {
-      throw new Error("Failed to heartbeat workflow run");
+      if (
+        !workflowRun ||
+        workflowRun.namespaceId !== this.namespaceId ||
+        workflowRun.status !== "running" ||
+        workflowRun.workerId !== params.workerId
+      ) {
+        throw new Error("Failed to heartbeat workflow run");
+      }
+
+      const now = new Date();
+      const leaseDuration = new Date(now.getTime() + params.leaseDurationMs);
+
+      const updated: WorkflowRun = {
+        ...workflowRun,
+        availableAt: leaseDuration,
+        updatedAt: now,
+      };
+
+      this.workflowRuns.set(params.workflowRunId, updated);
+
+      return Promise.resolve(structuredClone(updated));
+    } catch (error) {
+      return Promise.reject(error);
     }
-
-    const now = new Date();
-    const leaseDuration = new Date(now.getTime() + params.leaseDurationMs);
-
-    const updated: WorkflowRun = {
-      ...workflowRun,
-      availableAt: leaseDuration,
-      updatedAt: now,
-    };
-
-    this.workflowRuns.set(params.workflowRunId, updated);
-
-    return structuredClone(updated);
   }
 
-  async sleepWorkflowRun(params: SleepWorkflowRunParams): Promise<WorkflowRun> {
-    const workflowRun = this.workflowRuns.get(params.workflowRunId);
+  sleepWorkflowRun(params: SleepWorkflowRunParams): Promise<WorkflowRun> {
+    try {
+      const workflowRun = this.workflowRuns.get(params.workflowRunId);
 
-    if (
-      !workflowRun ||
-      workflowRun.namespaceId !== this.namespaceId ||
-      ["succeeded", "failed", "canceled"].includes(workflowRun.status) ||
-      workflowRun.workerId !== params.workerId
-    ) {
-      throw new Error("Failed to sleep workflow run");
+      if (
+        !workflowRun ||
+        workflowRun.namespaceId !== this.namespaceId ||
+        ["succeeded", "failed", "canceled"].includes(workflowRun.status) ||
+        workflowRun.workerId !== params.workerId
+      ) {
+        throw new Error("Failed to sleep workflow run");
+      }
+
+      const now = new Date();
+
+      const updated: WorkflowRun = {
+        ...workflowRun,
+        status: "sleeping",
+        availableAt: params.availableAt,
+        workerId: null,
+        updatedAt: now,
+      };
+
+      this.workflowRuns.set(params.workflowRunId, updated);
+
+      return Promise.resolve(structuredClone(updated));
+    } catch (error) {
+      return Promise.reject(error);
     }
-
-    const now = new Date();
-
-    const updated: WorkflowRun = {
-      ...workflowRun,
-      status: "sleeping",
-      availableAt: params.availableAt,
-      workerId: null,
-      updatedAt: now,
-    };
-
-    this.workflowRuns.set(params.workflowRunId, updated);
-
-    return structuredClone(updated);
   }
 
-  async markWorkflowRunSucceeded(
+  markWorkflowRunSucceeded(
     params: MarkWorkflowRunSucceededParams,
   ): Promise<WorkflowRun> {
     const workflowRun = this.workflowRuns.get(params.workflowRunId);
@@ -263,10 +327,10 @@ export class BackendMemory implements Backend {
 
     this.workflowRuns.set(params.workflowRunId, updated);
 
-    return structuredClone(updated);
+    return Promise.resolve(structuredClone(updated));
   }
 
-  async markWorkflowRunFailed(
+  markWorkflowRunFailed(
     params: MarkWorkflowRunFailedParams,
   ): Promise<WorkflowRun> {
     const workflowRun = this.workflowRuns.get(params.workflowRunId);
@@ -308,67 +372,65 @@ export class BackendMemory implements Backend {
 
     this.workflowRuns.set(params.workflowRunId, updated);
 
-    return structuredClone(updated);
+    return Promise.resolve(structuredClone(updated));
   }
 
-  async cancelWorkflowRun(
-    params: CancelWorkflowRunParams,
-  ): Promise<WorkflowRun> {
-    const workflowRun = this.workflowRuns.get(params.workflowRunId);
+  cancelWorkflowRun(params: CancelWorkflowRunParams): Promise<WorkflowRun> {
+    try {
+      const workflowRun = this.workflowRuns.get(params.workflowRunId);
 
-    if (!workflowRun || workflowRun.namespaceId !== this.namespaceId) {
-      throw new Error(`Workflow run ${params.workflowRunId} does not exist`);
+      if (!workflowRun || workflowRun.namespaceId !== this.namespaceId) {
+        throw new Error(`Workflow run ${params.workflowRunId} does not exist`);
+      }
+
+      // If already canceled, just return it
+      if (workflowRun.status === "canceled") {
+        return Promise.resolve(structuredClone(workflowRun));
+      }
+
+      // Cannot cancel succeeded or failed workflows
+      if (["succeeded", "failed"].includes(workflowRun.status)) {
+        throw new Error(
+          `Cannot cancel workflow run ${params.workflowRunId} with status ${workflowRun.status}`,
+        );
+      }
+
+      const now = new Date();
+
+      const updated: WorkflowRun = {
+        ...workflowRun,
+        status: "canceled",
+        workerId: null,
+        availableAt: null,
+        finishedAt: now,
+        updatedAt: now,
+      };
+
+      this.workflowRuns.set(params.workflowRunId, updated);
+
+      return Promise.resolve(structuredClone(updated));
+    } catch (error) {
+      return Promise.reject(error);
     }
-
-    // If already canceled, just return it
-    if (workflowRun.status === "canceled") {
-      return structuredClone(workflowRun);
-    }
-
-    // Cannot cancel succeeded or failed workflows
-    if (["succeeded", "failed"].includes(workflowRun.status)) {
-      throw new Error(
-        `Cannot cancel workflow run ${params.workflowRunId} with status ${workflowRun.status}`,
-      );
-    }
-
-    const now = new Date();
-
-    const updated: WorkflowRun = {
-      ...workflowRun,
-      status: "canceled",
-      workerId: null,
-      availableAt: null,
-      finishedAt: now,
-      updatedAt: now,
-    };
-
-    this.workflowRuns.set(params.workflowRunId, updated);
-
-    return structuredClone(updated);
   }
 
-  async listStepAttempts(
-    params: ListStepAttemptsParams,
-  ): Promise<StepAttempt[]> {
+  listStepAttempts(params: ListStepAttemptsParams): Promise<StepAttempt[]> {
     const stepIds = this.workflowRunSteps.get(params.workflowRunId);
 
     if (!stepIds) {
-      return [];
+      return Promise.resolve([]);
     }
 
-    const steps = Array.from(stepIds)
+    const steps = [...stepIds]
       .map((id) => this.stepAttempts.get(id))
       .filter((step): step is StepAttempt => step !== undefined)
       .filter((step) => step.namespaceId === this.namespaceId)
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      .toSorted((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
-    return structuredClone(steps);
+    return Promise.resolve(structuredClone(steps));
   }
 
-  async createStepAttempt(
-    params: CreateStepAttemptParams,
-  ): Promise<StepAttempt> {
+  createStepAttempt(params: CreateStepAttemptParams): Promise<StepAttempt> {
     const id = randomUUID();
     const now = new Date();
 
@@ -401,22 +463,20 @@ export class BackendMemory implements Backend {
     }
     stepSet.add(id);
 
-    return structuredClone(stepAttempt);
+    return Promise.resolve(structuredClone(stepAttempt));
   }
 
-  async getStepAttempt(
-    params: GetStepAttemptParams,
-  ): Promise<StepAttempt | null> {
+  getStepAttempt(params: GetStepAttemptParams): Promise<StepAttempt | null> {
     const stepAttempt = this.stepAttempts.get(params.stepAttemptId);
 
     if (!stepAttempt || stepAttempt.namespaceId !== this.namespaceId) {
-      return null;
+      return Promise.resolve(null);
     }
 
-    return structuredClone(stepAttempt);
+    return Promise.resolve(structuredClone(stepAttempt));
   }
 
-  async markStepAttemptSucceeded(
+  markStepAttemptSucceeded(
     params: MarkStepAttemptSucceededParams,
   ): Promise<StepAttempt> {
     const stepAttempt = this.stepAttempts.get(params.stepAttemptId);
@@ -427,8 +487,7 @@ export class BackendMemory implements Backend {
       stepAttempt.namespaceId !== this.namespaceId ||
       stepAttempt.workflowRunId !== params.workflowRunId ||
       stepAttempt.status !== "running" ||
-      !workflowRun ||
-      workflowRun.status !== "running" ||
+      workflowRun?.status !== "running" ||
       workflowRun.workerId !== params.workerId
     ) {
       throw new Error("Failed to mark step attempt succeeded");
@@ -447,10 +506,10 @@ export class BackendMemory implements Backend {
 
     this.stepAttempts.set(params.stepAttemptId, updated);
 
-    return structuredClone(updated);
+    return Promise.resolve(structuredClone(updated));
   }
 
-  async markStepAttemptFailed(
+  markStepAttemptFailed(
     params: MarkStepAttemptFailedParams,
   ): Promise<StepAttempt> {
     const stepAttempt = this.stepAttempts.get(params.stepAttemptId);
@@ -461,8 +520,7 @@ export class BackendMemory implements Backend {
       stepAttempt.namespaceId !== this.namespaceId ||
       stepAttempt.workflowRunId !== params.workflowRunId ||
       stepAttempt.status !== "running" ||
-      !workflowRun ||
-      workflowRun.status !== "running" ||
+      workflowRun?.status !== "running" ||
       workflowRun.workerId !== params.workerId
     ) {
       throw new Error("Failed to mark step attempt failed");
@@ -481,6 +539,6 @@ export class BackendMemory implements Backend {
 
     this.stepAttempts.set(params.stepAttemptId, updated);
 
-    return structuredClone(updated);
+    return Promise.resolve(structuredClone(updated));
   }
 }

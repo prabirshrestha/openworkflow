@@ -1,1 +1,1 @@
-export { BackendMemory } from "./backend.js";
+export { BackendMemory, type BackendMemoryState } from "./backend.js";
