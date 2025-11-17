@@ -17,15 +17,17 @@ npm install @openworkflow/backend-memory openworkflow
 
 ## Usage
 
+**Important**: Create the backend and OpenWorkflow instance **once** at application startup, not for every request.
+
 ```typescript
 import { BackendMemory } from "@openworkflow/backend-memory";
 import { OpenWorkflow } from "openworkflow";
 
-// Create an in-memory backend
+// Create these ONCE at application startup
 const backend = BackendMemory.create();
 const ow = new OpenWorkflow({ backend });
 
-// Define and run workflows as normal
+// Define workflows ONCE at startup
 const myWorkflow = ow.defineWorkflow(
   { name: "my-workflow" },
   async ({ input, step }) => {
@@ -36,16 +38,16 @@ const myWorkflow = ow.defineWorkflow(
   },
 );
 
-// Start a worker
+// Start worker ONCE at startup
 const worker = ow.newWorker();
 await worker.start();
 
-// Run a workflow
-const handle = await myWorkflow.run({ data: "test" });
-const result = await handle.result();
-
-// Clean up
-await worker.stop();
+// For each request, use the same backend and workflow definitions
+// If receiving state from a client, use importState()
+app.post("/resume", (req, res) => {
+  backend.importState(req.body.state); // Import state into existing backend
+  // ... handle request
+});
 ```
 
 ## Configuration
@@ -107,13 +109,38 @@ backend.importState(receivedState);
 
 ## State Transfer Pattern
 
-The in-memory backend enables a powerful pattern for stateless, horizontally scalable workflow execution:
+The in-memory backend enables a powerful pattern for stateless, horizontally scalable workflow execution.
+
+**Important**: Create the backend and OpenWorkflow instance **once** at application startup. For each request, use `importState()` to restore state into the **same** backend instance.
+
+```typescript
+// At application startup (ONCE)
+const backend = BackendMemory.create();
+const ow = new OpenWorkflow({ backend });
+const myWorkflow = ow.defineWorkflow({ name: "my-workflow" }, async ({ input, step }) => {
+  // ... workflow logic
+});
+const worker = ow.newWorker();
+await worker.start();
+
+// For each HTTP request (MANY TIMES)
+app.post("/workflows/resume", (req, res) => {
+  // Import state into the EXISTING backend
+  backend.importState(req.body.state);
+  
+  // Process and export updated state
+  const updatedState = backend.exportState();
+  res.json({ state: updatedState });
+});
+```
+
+### How it works:
 
 1. **Server**: Start a workflow and export its state
 2. **Transfer**: Send the state to a client (e.g., via HTTP SSE, WebSocket, or REST API)
 3. **Client**: Import the state, execute workflow steps, and export the updated state
 4. **Transfer**: Send the updated state back to the server
-5. **Server**: Import the updated state to see workflow progress
+5. **Server**: Import the updated state using `importState()` on the **same** backend instance
 
 This pattern allows:
 - **Zero database overhead**: No persistent storage required
@@ -121,7 +148,7 @@ This pattern allows:
 - **Client-side execution**: Offload workflow execution to clients when appropriate
 - **Flexible deployment**: Mix server-side and client-side execution as needed
 
-See the [examples/memory-sse](../../examples/memory-sse) directory for a complete example.
+See the [examples/memory-http-server](../../examples/memory-http-server) and [examples/memory-sse](../../examples/memory-sse) directories for complete examples.
 
 ## License
 
